@@ -55,5 +55,7 @@ Add `--json` to any of them for machine-readable output.
 ```sh
 bin/build      # build/addoner
 bin/test       # tests, offscreen
-bin/install    # package and install, so it shows up in the app launcher
+make install   # install for your user in ~/.local (no sudo), shows up in the launcher
+make uninstall
+bin/install    # or build and install a system package with makepkg
 ```
