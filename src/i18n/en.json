@@ -1,0 +1,6 @@
+{
+  "%n results": { "one": "%n result", "other": "%n results" },
+  "%n addons": { "one": "%n addon", "other": "%n addons" },
+  "%n updates available": { "one": "%n update available", "other": "%n updates available" },
+  "Updating %n addons…": { "one": "Updating %n addon…", "other": "Updating %n addons…" }
+}

@@ -1,0 +1,25 @@
+QT += core gui network qml quick quickcontrols2
+
+CONFIG += c++17 release
+win32: CONFIG += windows
+TARGET = addoner
+TEMPLATE = app
+
+HEADERS += \
+    src/backend.h \
+    src/cli.h \
+    src/curseforge.h \
+    src/manager.h \
+    src/theme.h \
+    src/translator.h
+
+SOURCES += \
+    src/main.cpp \
+    src/backend.cpp \
+    src/cli.cpp \
+    src/curseforge.cpp \
+    src/manager.cpp \
+    src/theme.cpp \
+    src/translator.cpp
+
+RESOURCES += src/resources.qrc

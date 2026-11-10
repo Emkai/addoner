@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Addoner
+Comment=Browse CurseForge and install World of Warcraft addons
+Exec=addoner
+Icon=addoner
+Terminal=false
+Categories=Game;Utility;
+StartupWMClass=addoner
