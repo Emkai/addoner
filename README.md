@@ -1,48 +1,52 @@
 # Addoner
 
-Browse CurseForge and install World of Warcraft addons, plus your own addons
-from a local folder. A small Qt Quick app for Omarchy.
+Install World of Warcraft addons from the zips you download, plus your own
+addons from a local folder. A small Qt Quick app for Omarchy.
 
-- **Browse**: search CurseForge (most popular when the search is empty) and
-  install with one key. Required libraries are installed along with an addon.
-- **Installed**: everything Addoner put in AddOns, with update checks (on
-  launch and with `R`) and Update all. Folders it didn't install are listed
-  but never touched.
+- **Downloads**: every addon zip in `~/Downloads` (CurseForge, WoWInterface,
+  GitHub's *Download ZIP*), newest first, with whether it's new, installed,
+  an update, or older than what you have. Zips without an addon in them are
+  left out. Install or update with one key; folders the previous version
+  installed are replaced. New downloads show up on their own.
+- **Installed**: what Addoner installed, with its version and folders, and
+  Update all when a newer zip is in Downloads. Folders it didn't install are
+  listed but never touched.
 - **Local**: folders in `local-addons/` get *symlinked* into AddOns, so your
   edits show up after `/reload` in game. **New addon** writes a starter `.toc`
   and `.lua` with a slash command and links it in.
-- **Settings**: your CurseForge API key (free from
-  [console.curseforge.com](https://console.curseforge.com), or set
-  `CURSEFORGE_API_KEY`), the AddOns folder, and the local addons folder.
+- **Settings**: the AddOns folder, the local addons folder, and the
+  downloads folder.
 
-Settings live in `~/.config/addoner/config.json` (readable only by you), and
-the list of installed addons is in `~/.local/share/addoner/installed.json`.
+Versions come from each addon's `.toc` (`## Version:`). GitHub archives
+(`MyAddon-main/MyAddon.toc`) are unwrapped and installed as `MyAddon`.
+
+Settings live in `~/.config/addoner/config.json`, and the list of installed
+addons is in `~/.local/share/addoner/installed.json`.
 
 ## Keys
 
 | Key | Action |
 | --- | --- |
-| `1`–`4` | Browse, Installed, Local, Settings |
-| `/` | Search CurseForge |
+| `1`–`4` | Downloads, Installed, Local, Settings |
 | `↑` `↓` / `J` `K` | Move the selection |
 | `Space` | Install, update, link or unlink |
 | `Delete` / `X` | Remove or unlink |
-| `O` | Open the addon's CurseForge page, or the local folder |
-| `R` | Check for updates |
+| `O` | Open this tab's folder |
+| `R` | Look in Downloads again |
 | `U` | Update all |
 | `N` | New local addon |
-| `Esc` | Leave the search field |
+| `Esc` | Clear the message |
 | `?` | Show all shortcuts |
 | `Q` | Quit |
 
 ## Command line
 
 ```sh
-addoner search details        # search CurseForge
-addoner install 61284         # install or update (with required libraries)
-addoner remove 61284
-addoner list                  # installed, after checking for updates
-addoner update                # update everything
+addoner downloads             # addon zips in Downloads and their status
+addoner install Bagnon-12.1.9.zip   # a file in Downloads, or any path
+addoner remove Bagnon         # by main folder name
+addoner list                  # installed, and which have an update zip
+addoner update                # install every update zip
 addoner local                 # local addons and whether they're linked
 addoner link MyAddon / unlink MyAddon
 addoner new MyAddon --title "My Addon" [--interface 16001]

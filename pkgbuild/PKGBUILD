@@ -1,7 +1,7 @@
 pkgname=addoner
 pkgver=0.1.0
 pkgrel=1
-pkgdesc='Browse CurseForge and install World of Warcraft addons'
+pkgdesc='Install World of Warcraft addons from downloaded zips'
 arch=('x86_64' 'aarch64')
 license=('MIT')
 depends=('qt6-base' 'qt6-declarative' 'qt6-wayland' 'libarchive')

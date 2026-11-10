@@ -1,6 +1,7 @@
 #include "cli.h"
 
-#include <QEventLoop>
+#include <QDir>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -10,18 +11,19 @@
 
 namespace {
 
-const QStringList Commands{"help", "--help", "-h", "search", "list", "install", "remove", "update",
+const QStringList Commands{"help", "--help", "-h", "downloads", "list", "install", "remove", "update",
                            "local", "link", "unlink", "new"};
 
 const char *Usage =
     "Usage: addoner [command] [--json]\n"
     "\n"
     "  (no command)            open the window\n"
-    "  search <words>          search CurseForge (empty: most popular)\n"
-    "  install <id>            install or update an addon and its required libraries\n"
-    "  remove <id>             remove an installed CurseForge addon\n"
-    "  list                    installed addons, after checking for updates\n"
-    "  update                  update every addon with a newer version\n"
+    "  downloads               addon zips in the downloads folder, and their status\n"
+    "  install <zip>           install or update from a zip (a path, or a file name\n"
+    "                          in the downloads folder)\n"
+    "  remove <folder>         remove an addon Addoner installed\n"
+    "  list                    installed addons, and which have an update zip\n"
+    "  update                  install every update zip in the downloads folder\n"
     "  local                   list local addons and whether they're linked\n"
     "  link <name>             link a local addon into AddOns\n"
     "  unlink <name>           remove that link\n"
@@ -43,14 +45,6 @@ void print(bool json, const QJsonValue &value, const QString &text) {
         out() << text << Qt::endl;
 }
 
-// Runs an async manager call to completion.
-template <typename Start>
-void wait(Start start) {
-    QEventLoop loop;
-    start([&loop] { loop.quit(); });
-    loop.exec();
-}
-
 QString option(QStringList &args, const QString &name) {
     const int i = args.indexOf(name);
     if (i < 0 || i + 1 >= args.size())
@@ -58,11 +52,6 @@ QString option(QStringList &args, const QString &name) {
     const QString value = args.at(i + 1);
     args.remove(i, 2);
     return value;
-}
-
-int modIdArgument(const QStringList &args, bool *ok) {
-    *ok = args.size() == 2;
-    return *ok ? args[1].toInt(ok) : 0;
 }
 
 }  // namespace
@@ -78,86 +67,71 @@ int Cli::run(AddonManager &manager, QStringList args) {
         return 0;
     }
 
-    if (command == "search") {
-        QJsonArray mods;
-        QString error;
-        wait([&](auto quit) {
-            manager.search(args.mid(1).join(' '), 0, [&, quit](const QJsonArray &found, int, const QString &e) {
-                mods = found;
-                error = e;
-                quit();
-            });
-        });
-        if (!error.isEmpty())
-            return fail(error);
-        QJsonArray rows;
+    if (command == "downloads") {
+        const QJsonArray zips = manager.downloads();
         QString text;
-        for (const auto &value : mods) {
-            const QJsonObject mod = value.toObject();
-            const int id = mod.value("id").toInt();
-            rows.append(QJsonObject{{"id", id}, {"name", mod.value("name")}, {"summary", mod.value("summary")},
-                                    {"downloads", mod.value("downloadCount")}, {"installed", manager.isInstalled(id)}});
-            text += QString("%1  %2%3\n").arg(id, 8).arg(mod.value("name").toString(),
-                                                         manager.isInstalled(id) ? "  [installed]" : "");
+        for (const auto &value : zips) {
+            const QJsonObject zip = value.toObject();
+            const QString status = zip.value("status").toString();
+            const QString shown = status == "update" ? "update from " + zip.value("installedVersion").toString()
+                                : status == "older" ? "older than installed " + zip.value("installedVersion").toString()
+                                : status == "linked" ? "blocked: linked from local addons"
+                                : status == "new" ? "not installed" : "installed";
+            text += QString("%1  %2 %3  [%4]\n").arg(zip.value("file").toString(), zip.value("title").toString(),
+                                                     zip.value("version").toString(), shown);
         }
-        print(json, rows, text.trimmed());
+        print(json, zips, text.isEmpty() ? "No addon zips in " + manager.downloadsDir() : text.trimmed());
         return 0;
     }
 
-    if (command == "install" || command == "update") {
-        bool ok = true;
-        const int modId = command == "install" ? modIdArgument(args, &ok) : 0;
-        if (!ok)
-            return fail("install takes one CurseForge project id");
-        QString error;
-        if (command == "update") {
-            wait([&](auto quit) { manager.checkUpdates([&, quit](const QString &e) { error = e; quit(); }); });
-            if (!error.isEmpty())
-                return fail(error);
-        }
+    if (command == "install") {
+        if (args.size() != 2)
+            return fail("install takes one zip");
+        QString zip = args[1];
+        if (!QFileInfo(zip).isFile() && QFileInfo(QDir(manager.downloadsDir()).filePath(zip)).isFile())
+            zip = QDir(manager.downloadsDir()).filePath(zip);
+        QString name;
+        const QString error = manager.install(zip, &name);
+        if (!error.isEmpty())
+            return fail(error);
+        print(json, QJsonObject{{"installed", name}}, "Installed " + name);
+        return 0;
+    }
+
+    if (command == "update") {
         QStringList names;
-        wait([&](auto quit) {
-            auto done = [&, quit](const QStringList &n, const QString &e) { names = n; error = e; quit(); };
-            command == "install" ? manager.install(modId, done) : manager.updateAll(done);
-        });
+        const QString error = manager.updateAll(&names);
         if (!error.isEmpty())
             return fail(error);
         print(json, QJsonObject{{"installed", QJsonArray::fromStringList(names)}},
-              names.isEmpty() ? "Nothing to update." : "Installed " + names.join(", "));
+              names.isEmpty() ? "Nothing to update." : "Updated " + names.join(", "));
         return 0;
     }
 
     if (command == "remove") {
-        bool ok;
-        const int modId = modIdArgument(args, &ok);
-        if (!ok)
-            return fail("remove takes one CurseForge project id");
-        const QString error = manager.uninstall(modId);
+        if (args.size() != 2)
+            return fail("remove takes one addon folder name");
+        const QString error = manager.uninstall(args[1]);
         if (!error.isEmpty())
             return fail(error);
-        print(json, QJsonObject{{"removed", modId}}, "Removed.");
+        print(json, QJsonObject{{"removed", args[1]}}, "Removed.");
         return 0;
     }
 
     if (command == "list") {
-        QString error;
-        if (manager.hasApiKey())
-            wait([&](auto quit) { manager.checkUpdates([&, quit](const QString &e) { error = e; quit(); }); });
-        if (!error.isEmpty())
-            err() << "addoner: couldn't check for updates: " << error << Qt::endl;
-        const QJsonObject mods = manager.installedMods();
+        const QJsonObject addons = manager.installedAddons();
+        const auto updates = manager.updates();
         QJsonArray rows;
         QString text;
-        for (auto it = mods.begin(); it != mods.end(); ++it) {
+        for (auto it = addons.begin(); it != addons.end(); ++it) {
             QJsonObject row = it.value().toObject();
-            const int id = it.key().toInt();
-            row["id"] = id;
-            row["hasUpdate"] = manager.hasUpdate(id);
+            row["main"] = it.key();
+            row["updateZip"] = updates.value(it.key());
             rows.append(row);
-            text += QString("%1  %2  %3%4\n").arg(id, 8).arg(row.value("name").toString(), row.value("fileName").toString(),
-                                                            manager.hasUpdate(id) ? "  [update available]" : "");
+            text += QString("%1  %2%3\n").arg(it.key(), row.value("version").toString(),
+                                              updates.contains(it.key()) ? "  [update: " + QFileInfo(updates.value(it.key())).fileName() + "]" : "");
         }
-        print(json, rows, text.isEmpty() ? "No CurseForge addons installed." : text.trimmed());
+        print(json, rows, text.isEmpty() ? "No addons installed from zips." : text.trimmed());
         return 0;
     }
 

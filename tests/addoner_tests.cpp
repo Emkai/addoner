@@ -18,49 +18,26 @@ private slots:
         m_dir.reset(new QTemporaryDir);
         QDir(m_dir->path()).mkpath("wow/_forever_/Interface/AddOns");
         QDir(m_dir->path()).mkpath("local");
+        QDir(m_dir->path()).mkpath("downloads");
         m_manager.reset(new AddonManager(path("config"), path("data")));
-        QCOMPARE(m_manager->saveSettings("", addons(), path("local")), QString());
-    }
-
-    void bestFilePrefersNewestRelease() {
-        const QJsonObject mod{{"latestFilesIndexes", QJsonArray{
-            QJsonObject{{"fileId", 300}, {"releaseType", 2}},
-            QJsonObject{{"fileId", 100}, {"releaseType", 1}},
-            QJsonObject{{"fileId", 200}, {"releaseType", 1}},
-        }}};
-        QCOMPARE(AddonManager::bestFile(mod).value("fileId").toInt(), 200);
-
-        const QJsonObject betaOnly{{"latestFilesIndexes", QJsonArray{
-            QJsonObject{{"fileId", 5}, {"releaseType", 3}},
-            QJsonObject{{"fileId", 4}, {"releaseType", 2}},
-        }}};
-        QCOMPARE(AddonManager::bestFile(betaOnly).value("fileId").toInt(), 4);
-        QVERIFY(AddonManager::bestFile(QJsonObject{}).isEmpty());
-    }
-
-    void downloadUrlFallsBackToCdn() {
-        QCOMPARE(AddonManager::downloadUrl(QJsonObject{{"downloadUrl", "https://x/y.zip"}}).toString(),
-                 QString("https://x/y.zip"));
-        const QJsonObject file{{"id", 4567089}, {"fileName", "My Addon 1.0.zip"}};
-        QCOMPARE(AddonManager::downloadUrl(file).toString(QUrl::FullyEncoded),
-                 QString("https://edge.forgecdn.net/files/4567/89/My%20Addon%201.0.zip"));
+        QCOMPARE(m_manager->saveSettings(addons(), path("local"), path("downloads")), QString());
     }
 
     void installZipPlacesEveryFolder() {
-        const QString zip = makeZip("one", {"Core/Core.toc", "Core_Options/Options.toc"});
+        const QString zip = makeZip("one", {{"Core/Core.toc", ""}, {"Core_Options/Core_Options.toc", ""}});
         QStringList folders;
         QCOMPARE(m_manager->installZip(zip, {}, &folders), QString());
         QCOMPARE(folders, QStringList({"Core", "Core_Options"}));
         QVERIFY(QFile::exists(addons() + "/Core/Core.toc"));
-        QVERIFY(QFile::exists(addons() + "/Core_Options/Options.toc"));
+        QVERIFY(QFile::exists(addons() + "/Core_Options/Core_Options.toc"));
         // The staging folder is gone afterwards.
         QCOMPARE(QDir(addons()).entryList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden).size(), 2);
     }
 
     void installZipReplacesOldFolders() {
         QStringList folders;
-        QCOMPARE(m_manager->installZip(makeZip("v1", {"Core/old.lua", "Core_Legacy/x.toc"}), {}, &folders), QString());
-        QCOMPARE(m_manager->installZip(makeZip("v2", {"Core/new.lua"}), folders, &folders), QString());
+        QCOMPARE(m_manager->installZip(makeZip("v1", {{"Core/Core.toc", ""}, {"Core/old.lua", ""}, {"Core_Legacy/Core_Legacy.toc", ""}}), {}, &folders), QString());
+        QCOMPARE(m_manager->installZip(makeZip("v2", {{"Core/Core.toc", ""}, {"Core/new.lua", ""}}), folders, &folders), QString());
         QVERIFY(QFile::exists(addons() + "/Core/new.lua"));
         QVERIFY(!QFile::exists(addons() + "/Core/old.lua"));
         QVERIFY(!QDir(addons() + "/Core_Legacy").exists());
@@ -70,36 +47,111 @@ private slots:
         createLocal("Core");
         QCOMPARE(m_manager->link("Core"), QString());
         QStringList folders;
-        QVERIFY(!m_manager->installZip(makeZip("z", {"Core/Core.toc"}), {}, &folders).isEmpty());
+        QVERIFY(!m_manager->installZip(makeZip("z", {{"Core/Core.toc", ""}}), {}, &folders).isEmpty());
         QVERIFY(AddonManager::isLink(addons() + "/Core"));
         QVERIFY(QFile::exists(path("local/Core/Core.toc")));
     }
 
+    void inspectFindsMainFolderAndVersion() {
+        const QString zip = makeZip("Bagnon-12.1.9", {
+            {"BagBrother/BagBrother.toc", "## Title: Bag Brother\n## Version: 1\n"},
+            {"Bagnon/Bagnon.toc", "## Title: |cff00ff00Bagnon|r\n## Version: 12.1.9\n"},
+            {"Bagnon_Config/Bagnon_Config.toc", "## Version: 12.1.9\n"},
+            {"Bagnon/core.lua", "-- core"},
+        });
+        const auto info = m_manager->inspectZip(zip);
+        QCOMPARE(info.folders, QStringList({"BagBrother", "Bagnon", "Bagnon_Config"}));
+        QCOMPARE(info.main, QString("Bagnon"));
+        QCOMPARE(info.title, QString("Bagnon"));
+        QCOMPARE(info.version, QString("12.1.9"));
+    }
+
+    void downloadsSkipsZipsWithoutAddons() {
+        makeZip("photos", {{"holiday/beach.jpg", "jpeg"}});
+        makeZip("Thing-1.0", {{"Thing/Thing.toc", "## Version: 1.0\n"}});
+        const QJsonArray zips = m_manager->downloads();
+        QCOMPARE(zips.size(), 1);
+        QCOMPARE(zips.at(0).toObject().value("main").toString(), QString("Thing"));
+        QCOMPARE(zips.at(0).toObject().value("status").toString(), QString("new"));
+    }
+
+    void wrapperFoldersAreUnwrapped() {
+        // GitHub's "Download ZIP": one folder named after the branch.
+        const QString zip = makeZip("MyAddon-main", {
+            {"MyAddon-main/MyAddon_Mainline.toc", "## Version: 2\n"},
+            {"MyAddon-main/MyAddon.lua", "-- hi"},
+        });
+        QString name;
+        QCOMPARE(m_manager->install(zip, &name), QString());
+        QVERIFY(QFile::exists(addons() + "/MyAddon/MyAddon_Mainline.toc"));
+        QVERIFY(!QDir(addons() + "/MyAddon-main").exists());
+
+        // A wrapper around several addon folders.
+        const QString pack = makeZip("Pack-main", {
+            {"Pack-main/README.md", "readme"},
+            {"Pack-main/PackA/PackA.toc", "## Version: 1\n"},
+            {"Pack-main/PackB/PackB.toc", "## Version: 1\n"},
+        });
+        QCOMPARE(m_manager->inspectZip(pack).folders, QStringList({"PackA", "PackB"}));
+    }
+
+    void statusFollowsInstalledVersion() {
+        const QString v1 = makeZip("Thing-1.0", {{"Thing/Thing.toc", "## Version: 1.0\n"}});
+        QCOMPARE(m_manager->install(v1), QString());
+        QCOMPARE(status("Thing-1.0.zip"), QString("installed"));
+
+        makeZip("Thing-1.10", {{"Thing/Thing.toc", "## Version: 1.10\n"}});
+        makeZip("Thing-1.2", {{"Thing/Thing.toc", "## Version: 1.2\n"}});
+        QCOMPARE(status("Thing-1.10.zip"), QString("update"));
+        QCOMPARE(m_manager->updates().value("Thing"), path("downloads/Thing-1.10.zip"));
+
+        QStringList names;
+        QCOMPARE(m_manager->updateAll(&names), QString());
+        QCOMPARE(names, QStringList{"Thing"});
+        QCOMPARE(m_manager->installedAddons().value("Thing").toObject().value("version").toString(), QString("1.10"));
+        QCOMPARE(status("Thing-1.0.zip"), QString("older"));
+        QCOMPARE(status("Thing-1.2.zip"), QString("older"));
+        QVERIFY(m_manager->updates().isEmpty());
+    }
+
+    void linkedFolderBlocksZip() {
+        createLocal("Mine");
+        QCOMPARE(m_manager->link("Mine"), QString());
+        const QString zip = makeZip("Mine-1", {{"Mine/Mine.toc", "## Version: 1\n"}});
+        QCOMPARE(status("Mine-1.zip"), QString("linked"));
+        QVERIFY(!m_manager->install(zip).isEmpty());
+        QVERIFY(QFile::exists(path("local/Mine/Mine.toc")));
+    }
+
+    void compareVersionsByNumber() {
+        QVERIFY(AddonManager::compareVersions("12.1.10", "12.1.9") > 0);
+        QVERIFY(AddonManager::compareVersions("v1.2", "1.3") < 0);
+        QCOMPARE(AddonManager::compareVersions("1.0", "1.0.0"), 0);
+        QVERIFY(AddonManager::compareVersions("abc", "") != 0);
+    }
+
     void uninstallKeepsSharedFolders() {
-        QDir(addons()).mkpath("A");
-        QDir(addons()).mkpath("Lib");
-        QDir(addons()).mkpath("B");
-        m_manager->recordInstall(1, QJsonObject{{"name", "A"}, {"fileId", 10}, {"folders", QJsonArray{"A", "Lib"}}});
-        m_manager->recordInstall(2, QJsonObject{{"name", "B"}, {"fileId", 20}, {"folders", QJsonArray{"B", "Lib"}}});
-        QCOMPARE(m_manager->uninstall(1), QString());
+        QCOMPARE(m_manager->install(makeZip("A", {{"A/A.toc", ""}, {"Lib/Lib.toc", ""}})), QString());
+        QCOMPARE(m_manager->install(makeZip("B", {{"B/B.toc", ""}, {"Lib/Lib.toc", ""}})), QString());
+        QCOMPARE(m_manager->uninstall("A"), QString());
         QVERIFY(!QDir(addons() + "/A").exists());
         QVERIFY(QDir(addons() + "/Lib").exists());
-        QVERIFY(!m_manager->isInstalled(1));
-        QVERIFY(m_manager->isInstalled(2));
-        QVERIFY(!m_manager->uninstall(1).isEmpty());
+        QVERIFY(!m_manager->installedAddons().contains("A"));
+        QVERIFY(m_manager->installedAddons().contains("B"));
+        QVERIFY(!m_manager->uninstall("A").isEmpty());
     }
 
     void installedStateSurvivesRestart() {
-        m_manager->recordInstall(7, QJsonObject{{"name", "Seven"}, {"fileId", 70}, {"folders", QJsonArray{"Seven"}}});
+        QCOMPARE(m_manager->install(makeZip("Seven", {{"Seven/Seven.toc", ""}})), QString());
         AddonManager again(path("config"), path("data"));
-        QVERIFY(again.isInstalled(7));
+        QVERIFY(again.installedAddons().contains("Seven"));
         QCOMPARE(again.addonsDir(), addons());
+        QCOMPARE(again.downloadsDir(), path("downloads"));
     }
 
     void otherFoldersAreUnmanaged() {
         QDir(addons()).mkpath("Manual");
-        QDir(addons()).mkpath("Managed");
-        m_manager->recordInstall(1, QJsonObject{{"name", "M"}, {"fileId", 1}, {"folders", QJsonArray{"Managed"}}});
+        QCOMPARE(m_manager->install(makeZip("Managed", {{"Managed/Managed.toc", ""}})), QString());
         createLocal("Mine");
         QCOMPARE(m_manager->link("Mine"), QString());
         QCOMPARE(m_manager->otherFolders(), QStringList{"Manual"});
@@ -160,22 +212,11 @@ private slots:
         QCOMPARE(m_manager->guessInterface(), 16001);
     }
 
-    void settingsRejectMissingAddonsFolder() {
-        QVERIFY(!m_manager->saveSettings("", path("nope"), path("local")).isEmpty());
+    void settingsRejectMissingFolders() {
+        QVERIFY(!m_manager->saveSettings(path("nope"), path("local"), path("downloads")).isEmpty());
+        QVERIFY(!m_manager->saveSettings(addons(), path("local"), path("nope")).isEmpty());
         QCOMPARE(m_manager->addonsDir(), addons());
-    }
-
-    void apiKeyIsSavedPrivately() {
-        QCOMPARE(m_manager->saveSettings("secret", addons(), path("local")), QString());
-        QVERIFY(m_manager->hasApiKey());
-#ifndef Q_OS_WIN  // NTFS permissions aren't Unix mode bits
-        const auto perms = QFile(path("config/config.json")).permissions();
-        QVERIFY(!(perms & QFileDevice::ReadOther));
-        QVERIFY(!(perms & QFileDevice::ReadGroup));
-#endif
-        // An empty key on a later save keeps the saved one.
-        QCOMPARE(m_manager->saveSettings("", addons(), path("local")), QString());
-        QVERIFY(m_manager->hasApiKey());
+        QCOMPARE(m_manager->downloadsDir(), path("downloads"));
     }
 
     // Theme and translator, from the Omarchy app template.
@@ -206,8 +247,8 @@ private slots:
     void englishCatalogHasPlurals() {
         QTemporaryDir dir;
         Translator translator(dir.path() + "/language", QFINDTESTDATA("../src/i18n"));
-        QCOMPARE(translator.translate("Main", "%n addons", nullptr, 1), QString("%n addon"));
-        QCOMPARE(translator.translate("Main", "%n addons", nullptr, 3), QString("%n addons"));
+        QCOMPARE(translator.translate("Main", "%n addon zips in %1", nullptr, 1), QString("%n addon zip in %1"));
+        QCOMPARE(translator.translate("Main", "%n addon zips in %1", nullptr, 3), QString("%n addon zips in %1"));
     }
 
 private:
@@ -230,15 +271,22 @@ private:
         write(path("local/" + name + "/" + name + ".toc"), "## Interface: 1\n## Title: |cff00ff00" + name.toUtf8() + " Title|r\n");
     }
 
-    // Builds a zip the way CurseForge ships them: addon folders at the top.
-    QString makeZip(const QString &label, const QStringList &files) {
+    QString status(const QString &file) const {
+        for (const auto &value : m_manager->downloads())
+            if (value.toObject().value("file").toString() == file)
+                return value.toObject().value("status").toString();
+        return {};
+    }
+
+    // Builds downloads/<label>.zip from relative paths and their contents.
+    QString makeZip(const QString &label, const QList<std::pair<QString, QByteArray>> &files) {
         const QString root = path("zipsrc-" + label);
         QSet<QString> tops;
-        for (const QString &file : files) {
-            write(root + "/" + file, "-- " + file.toUtf8());
+        for (const auto &[file, contents] : files) {
+            write(root + "/" + file, contents);
             tops.insert(file.section('/', 0, 0));
         }
-        const QString zip = path(label + ".zip");
+        const QString zip = path("downloads/" + label + ".zip");
         QStringList args{"-a", "-cf", zip, "-C", root};
         args += QStringList(tops.begin(), tops.end());
         QProcess tar;

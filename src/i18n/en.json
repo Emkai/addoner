@@ -1,6 +1,4 @@
 {
-  "%n results": { "one": "%n result", "other": "%n results" },
-  "%n addons": { "one": "%n addon", "other": "%n addons" },
-  "%n updates available": { "one": "%n update available", "other": "%n updates available" },
-  "Updating %n addons…": { "one": "Updating %n addon…", "other": "Updating %n addons…" }
+  "%n addons installed from zips": { "one": "%n addon installed from zips", "other": "%n addons installed from zips" },
+  "%n addon zips in %1": { "one": "%n addon zip in %1", "other": "%n addon zips in %1" }
 }

@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Addoner
-Comment=Browse CurseForge and install World of Warcraft addons
+Comment=Install World of Warcraft addons from downloaded zips
 Exec=addoner
 Icon=addoner
 Terminal=false

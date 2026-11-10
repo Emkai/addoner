@@ -18,97 +18,96 @@ ApplicationWindow {
     Material.roundedScale: theme.radius
 
     property bool helpVisible: false
-    property bool freshSearch: true
-    readonly property bool modalOpen: newAddonDialog.visible || quitDialog.visible
+    readonly property bool modalOpen: newAddonDialog.visible
 
-    readonly property var lists: [browseList, installedList, localList]
+    readonly property var lists: [downloadsList, installedList, localList]
     function currentList() { return tabs.currentIndex < 3 ? lists[tabs.currentIndex] : null }
     function currentRow() {
         const list = currentList()
         return list && list.currentIndex >= 0 && list.model ? list.model[list.currentIndex] : null
     }
 
-    function compact(n) {
-        if (n >= 1e6) return qsTr("%1M").arg((n / 1e6).toLocaleString(Qt.locale(), 'f', 1))
-        if (n >= 1e3) return qsTr("%1K").arg((n / 1e3).toLocaleString(Qt.locale(), 'f', 0))
-        return Number(n).toLocaleString(Qt.locale(), 'f', 0)
-    }
-
     // Lists get a fresh array on every change; keep the scroll position and
     // selection instead of jumping back to the top.
-    function refill(list, model, keep) {
+    function refill(list, model) {
         const y = list.contentY, i = list.currentIndex
         list.model = model
-        if (keep) {
-            list.currentIndex = Math.min(Math.max(i, 0), list.count - 1)
-            list.contentY = y
-            list.returnToBounds()
-        } else {
-            list.currentIndex = list.count > 0 ? 0 : -1
-            list.positionViewAtBeginning()
+        list.currentIndex = list.count > 0 ? Math.min(Math.max(i, 0), list.count - 1) : -1
+        list.contentY = y
+        list.returnToBounds()
+    }
+
+    function shortDate(iso) {
+        return new Date(iso).toLocaleDateString(Qt.locale(), Locale.ShortFormat)
+    }
+
+    function zipAction(status) {
+        switch (status) {
+        case "new": return qsTr("Install")
+        case "update": return qsTr("Update")
+        case "older": return qsTr("Install older")
+        case "linked": return qsTr("Linked locally")
+        default: return qsTr("Reinstall")
         }
     }
 
-    function runSearch() {
-        freshSearch = true
-        backend.search(searchField.text)
+    function zipState(zip) {
+        const version = zip.version || qsTr("no version")
+        switch (zip.status) {
+        case "new": return qsTr("%1 · not installed").arg(version)
+        case "update": return qsTr("%1 · installed is %2").arg(version).arg(zip.installedVersion || qsTr("unknown"))
+        case "older": return qsTr("%1 · older than the installed %2").arg(version).arg(zip.installedVersion)
+        case "linked": return qsTr("%1 · a local addon is linked as %2").arg(version).arg(zip.main)
+        default: return qsTr("%1 · installed").arg(version)
+        }
     }
 
     function primaryAction() {
         const row = currentRow()
         if (!row) return
-        if (tabs.currentIndex === 2) {
+        if (tabs.currentIndex === 0) {
+            if (row.status !== "linked") backend.install(row.path)
+        } else if (tabs.currentIndex === 1) {
+            if (row.updateZip) backend.install(row.updateZip)
+        } else {
             row.linked ? backend.unlink(row.name) : backend.link(row.name)
-        } else if (!row.installed || row.hasUpdate) {
-            backend.install(row.id)
         }
     }
 
     function removeAction() {
         const row = currentRow()
         if (!row) return
-        if (tabs.currentIndex === 2) {
-            if (row.linked) backend.unlink(row.name)
-        } else if (row.installed) {
-            backend.uninstall(row.id)
-        }
+        if (tabs.currentIndex === 1) backend.uninstall(row.main)
+        else if (tabs.currentIndex === 2 && row.linked) backend.unlink(row.name)
     }
 
     function openAction() {
-        const row = currentRow()
-        if (tabs.currentIndex === 2) backend.openLocalFolder()
-        else if (row && row.url) Qt.openUrlExternally(row.url)
-    }
-
-    function quit() {
-        if (backend.busy) quitDialog.open()
-        else Qt.quit()
+        backend.openFolder(tabs.currentIndex === 1 ? backend.addonsDir
+                         : tabs.currentIndex === 2 ? backend.localDir
+                         : backend.downloadsDir)
     }
 
     Component.onCompleted: {
-        refill(installedList, backend.installed, false)
-        refill(localList, backend.localAddons, false)
-        if (backend.apiKeySet) runSearch()
-        else tabs.currentIndex = 3
+        refill(downloadsList, backend.downloads)
+        refill(installedList, backend.installed)
+        refill(localList, backend.localAddons)
+        if (!backend.addonsDirExists) tabs.currentIndex = 3
     }
 
     Connections {
         target: backend
-        function onResultsChanged() {
-            if (backend.searching) return
-            refill(browseList, backend.results, !win.freshSearch)
-            win.freshSearch = false
+        function onListsChanged() {
+            win.refill(downloadsList, backend.downloads)
+            win.refill(installedList, backend.installed)
+            win.refill(localList, backend.localAddons)
         }
-        function onInstalledChanged() { refill(installedList, backend.installed, true) }
-        function onLocalChanged() { refill(localList, backend.localAddons, true) }
     }
 
     Shortcut { sequence: "?"; context: Qt.ApplicationShortcut; enabled: !win.modalOpen; onActivated: win.helpVisible = !win.helpVisible }
-    Shortcut { sequence: "Q"; context: Qt.ApplicationShortcut; enabled: !win.modalOpen; onActivated: win.quit() }
+    Shortcut { sequence: "Q"; context: Qt.ApplicationShortcut; enabled: !win.modalOpen; onActivated: Qt.quit() }
     Shortcut { sequence: "Escape"; context: Qt.ApplicationShortcut
         onActivated: {
             if (newAddonDialog.visible) newAddonDialog.reject()
-            else if (quitDialog.visible) quitDialog.reject()
             else if (win.helpVisible) win.helpVisible = false
             else { backend.clearMessage(); content.forceActiveFocus() }
         }
@@ -117,9 +116,6 @@ ApplicationWindow {
     Shortcut { sequence: "2"; context: Qt.ApplicationShortcut; enabled: !win.modalOpen; onActivated: tabs.currentIndex = 1 }
     Shortcut { sequence: "3"; context: Qt.ApplicationShortcut; enabled: !win.modalOpen; onActivated: tabs.currentIndex = 2 }
     Shortcut { sequence: "4"; context: Qt.ApplicationShortcut; enabled: !win.modalOpen; onActivated: tabs.currentIndex = 3 }
-    Shortcut { sequences: ["/", StandardKey.Find]; context: Qt.ApplicationShortcut; enabled: !win.modalOpen
-        onActivated: { tabs.currentIndex = 0; searchField.forceActiveFocus(); searchField.selectAll() }
-    }
     Shortcut { sequences: ["Down", "J"]; context: Qt.ApplicationShortcut; enabled: !win.modalOpen
         onActivated: { const l = win.currentList(); if (l) l.incrementCurrentIndex() }
     }
@@ -130,7 +126,7 @@ ApplicationWindow {
     Shortcut { sequences: ["Delete", "X"]; context: Qt.ApplicationShortcut; enabled: !win.modalOpen; onActivated: win.removeAction() }
     Shortcut { sequence: "O"; context: Qt.ApplicationShortcut; enabled: !win.modalOpen; onActivated: win.openAction() }
     Shortcut { sequence: "R"; context: Qt.ApplicationShortcut; enabled: !win.modalOpen
-        onActivated: { tabs.currentIndex = 1; backend.checkUpdates() }
+        onActivated: backend.rescan()
     }
     Shortcut { sequence: "U"; context: Qt.ApplicationShortcut; enabled: !win.modalOpen
         onActivated: { tabs.currentIndex = 1; backend.updateAll() }
@@ -156,14 +152,13 @@ ApplicationWindow {
                 id: tabs
                 Layout.fillWidth: true
                 background: Rectangle { color: "#141417" }
-                TabButton { text: qsTr("Browse"); focusPolicy: Qt.NoFocus }
                 TabButton {
-                    Material.roundedScale: theme.radius
                     focusPolicy: Qt.NoFocus
                     text: backend.updateCount > 0
-                          ? qsTr("Installed (%1)").arg(backend.updateCount.toLocaleString(Qt.locale(), 'f', 0))
-                          : qsTr("Installed")
+                          ? qsTr("Downloads (%1)").arg(backend.updateCount.toLocaleString(Qt.locale(), 'f', 0))
+                          : qsTr("Downloads")
                 }
+                TabButton { text: qsTr("Installed"); focusPolicy: Qt.NoFocus }
                 TabButton { text: qsTr("Local"); focusPolicy: Qt.NoFocus }
                 TabButton { text: qsTr("Settings"); focusPolicy: Qt.NoFocus }
             }
@@ -188,7 +183,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
-                // Browse
+                // Downloads
                 ColumnLayout {
                     spacing: 8
 
@@ -197,34 +192,31 @@ ApplicationWindow {
                         Layout.margins: 16
                         Layout.bottomMargin: 0
                         spacing: 12
-                        TextField {
-                            id: searchField
+                        Label {
                             Layout.fillWidth: true
-                            placeholderText: qsTr("Search CurseForge")
-                            onAccepted: { win.runSearch(); content.forceActiveFocus() }
+                            elide: Text.ElideMiddle
+                            opacity: 0.7
+                            text: qsTr("%n addon zips in %1", "", downloadsList.count).arg(backend.downloadsDir)
                         }
                         Button {
                             Material.roundedScale: theme.radius
                             focusPolicy: Qt.NoFocus
-                            text: qsTr("Search")
+                            text: qsTr("Open folder")
+                            flat: true
+                            onClicked: backend.openFolder(backend.downloadsDir)
+                        }
+                        Button {
+                            Material.roundedScale: theme.radius
+                            focusPolicy: Qt.NoFocus
+                            text: qsTr("Update all")
                             highlighted: true
-                            onClicked: win.runSearch()
+                            enabled: backend.updateCount > 0
+                            onClicked: backend.updateAll()
                         }
                     }
 
-                    Label {
-                        Layout.leftMargin: 18
-                        opacity: 0.6
-                        font.pixelSize: 12
-                        visible: backend.apiKeySet
-                        text: backend.searching ? qsTr("Searching…")
-                            : backend.searchError ? qsTr("Search failed")
-                            : searchField.text.length > 0 ? qsTr("%n results", "", backend.resultsTotal)
-                            : qsTr("Most popular")
-                    }
-
                     ListView {
-                        id: browseList
+                        id: downloadsList
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         Layout.leftMargin: 8
@@ -233,51 +225,25 @@ ApplicationWindow {
                         spacing: 2
                         boundsBehavior: Flickable.StopAtBounds
                         ScrollBar.vertical: ScrollBar {}
-                        onAtYEndChanged: if (atYEnd && count > 0) backend.loadMore()
                         delegate: AddonRow {
-                            subtitle: qsTr("by %1 · %2 downloads").arg(modelData.authors).arg(win.compact(modelData.downloads))
-                            onActivated: backend.install(modelData.id)
-                            onRemoveRequested: backend.uninstall(modelData.id)
+                            title: modelData.title
+                            subtitle: win.zipState(modelData)
+                            detail: modelData.file + "  ·  " + win.shortDate(modelData.modified) + "  ·  " + modelData.folders.join(", ")
+                            badge: modelData.status === "update" ? qsTr("update") : ""
+                            actionText: win.zipAction(modelData.status)
+                            actionHighlighted: modelData.status === "new" || modelData.status === "update"
+                            actionEnabled: modelData.status !== "linked"
+                            onActivated: backend.install(modelData.path)
                         }
-
-                        ColumnLayout {
-                            parent: browseList
+                        Label {
+                            parent: downloadsList
                             anchors.centerIn: parent
-                            visible: !backend.apiKeySet
-                            spacing: 12
-                            Label { text: qsTr("Add a CurseForge API key to browse addons."); Layout.alignment: Qt.AlignHCenter }
-                            Button {
-                                Material.roundedScale: theme.radius
-                                focusPolicy: Qt.NoFocus
-                                text: qsTr("Open Settings")
-                                highlighted: true
-                                Layout.alignment: Qt.AlignHCenter
-                                onClicked: tabs.currentIndex = 3
-                            }
-                        }
-                        ColumnLayout {
-                            parent: browseList
-                            anchors.centerIn: parent
-                            width: Math.min(parent.width - 48, 560)
-                            visible: backend.apiKeySet && !backend.searching && browseList.count === 0
-                            spacing: 12
-                            Label {
-                                Layout.fillWidth: true
-                                horizontalAlignment: Text.AlignHCenter
-                                wrapMode: Text.Wrap
-                                text: backend.searchError || qsTr("Nothing found")
-                                color: backend.searchError ? "#ff8a8f" : "white"
-                                opacity: backend.searchError ? 1 : 0.6
-                            }
-                            Button {
-                                Material.roundedScale: theme.radius
-                                focusPolicy: Qt.NoFocus
-                                visible: backend.searchError !== ""
-                                Layout.alignment: Qt.AlignHCenter
-                                text: qsTr("Open Settings")
-                                highlighted: true
-                                onClicked: tabs.currentIndex = 3
-                            }
+                            width: parent.width * 0.7
+                            horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.Wrap
+                            visible: downloadsList.count === 0
+                            opacity: 0.6
+                            text: qsTr("No addon zips in %1 yet. Download an addon's zip from CurseForge, WoWInterface or GitHub and it shows up here.").arg(backend.downloadsDir)
                         }
                     }
                 }
@@ -294,24 +260,21 @@ ApplicationWindow {
                         Label {
                             Layout.fillWidth: true
                             elide: Text.ElideRight
-                            text: backend.updateCount > 0
-                                  ? qsTr("%n addons", "", installedList.count) + " · " + qsTr("%n updates available", "", backend.updateCount)
-                                  : qsTr("%n addons", "", installedList.count)
+                            text: qsTr("%n addons installed from zips", "", installedList.count)
                         }
                         Button {
                             Material.roundedScale: theme.radius
                             focusPolicy: Qt.NoFocus
-                            text: qsTr("Check for updates")
+                            text: qsTr("Open folder")
                             flat: true
-                            enabled: !backend.busy && installedList.count > 0
-                            onClicked: backend.checkUpdates()
+                            onClicked: backend.openFolder(backend.addonsDir)
                         }
                         Button {
                             Material.roundedScale: theme.radius
                             focusPolicy: Qt.NoFocus
                             text: qsTr("Update all")
                             highlighted: true
-                            enabled: !backend.busy && backend.updateCount > 0
+                            enabled: backend.updateCount > 0
                             onClicked: backend.updateAll()
                         }
                     }
@@ -327,9 +290,15 @@ ApplicationWindow {
                         boundsBehavior: Flickable.StopAtBounds
                         ScrollBar.vertical: ScrollBar {}
                         delegate: AddonRow {
-                            subtitle: (modelData.displayName || modelData.fileName || "") + "  ·  " + modelData.folders
-                            onActivated: backend.install(modelData.id)
-                            onRemoveRequested: backend.uninstall(modelData.id)
+                            title: modelData.title
+                            subtitle: (modelData.version || qsTr("no version")) + "  ·  " + modelData.folders
+                            detail: qsTr("from %1").arg(modelData.zip)
+                            badge: modelData.updateZip ? qsTr("update") : ""
+                            actionText: modelData.updateZip ? qsTr("Update") : ""
+                            actionHighlighted: true
+                            removable: true
+                            onActivated: backend.install(modelData.updateZip)
+                            onRemoveRequested: backend.uninstall(modelData.main)
                         }
                         footer: Item {
                             width: installedList.width
@@ -361,7 +330,7 @@ ApplicationWindow {
                             anchors.centerIn: parent
                             visible: installedList.count === 0
                             opacity: 0.6
-                            text: qsTr("No CurseForge addons installed yet")
+                            text: qsTr("Nothing installed from a zip yet")
                         }
                     }
                 }
@@ -386,7 +355,7 @@ ApplicationWindow {
                             focusPolicy: Qt.NoFocus
                             text: qsTr("Open folder")
                             flat: true
-                            onClicked: backend.openLocalFolder()
+                            onClicked: backend.openFolder(backend.localDir)
                         }
                         Button {
                             Material.roundedScale: theme.radius
@@ -435,22 +404,6 @@ ApplicationWindow {
                         Item { Layout.preferredHeight: 8 }
 
                         TextField {
-                            id: keyField
-                            Layout.fillWidth: true
-                            echoMode: TextInput.Password
-                            placeholderText: backend.apiKeySet ? qsTr("CurseForge API key (saved, type to replace)")
-                                                               : qsTr("CurseForge API key")
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            wrapMode: Text.Wrap
-                            opacity: 0.7
-                            textFormat: Text.StyledText
-                            linkColor: theme.accent
-                            text: qsTr("Get a free key at <a href=\"https://console.curseforge.com\">console.curseforge.com</a>. You can also set CURSEFORGE_API_KEY.")
-                            onLinkActivated: (link) => Qt.openUrlExternally(link)
-                        }
-                        TextField {
                             id: addonsField
                             Layout.fillWidth: true
                             placeholderText: qsTr("WoW AddOns folder")
@@ -462,16 +415,20 @@ ApplicationWindow {
                             placeholderText: qsTr("Local addons folder")
                             text: backend.localDir
                         }
+                        TextField {
+                            id: downloadsField
+                            Layout.fillWidth: true
+                            placeholderText: qsTr("Downloads folder, where addon zips are found")
+                            text: backend.downloadsDir
+                        }
                         Button {
                             Material.roundedScale: theme.radius
                             focusPolicy: Qt.NoFocus
                             text: qsTr("Save")
                             highlighted: true
                             onClicked: {
-                                if (backend.saveSettings(keyField.text, addonsField.text, localField.text) === "") {
-                                    keyField.text = ""
-                                    if (backend.apiKeySet) tabs.currentIndex = 0
-                                }
+                                if (backend.saveSettings(addonsField.text, localField.text, downloadsField.text) === "")
+                                    tabs.currentIndex = 0
                             }
                         }
                     }
@@ -489,12 +446,6 @@ ApplicationWindow {
                     anchors.leftMargin: 12
                     anchors.rightMargin: 12
                     spacing: 8
-                    BusyIndicator {
-                        running: backend.busy || backend.searching
-                        visible: running
-                        Layout.preferredWidth: 22
-                        Layout.preferredHeight: 22
-                    }
                     Label {
                         Layout.fillWidth: true
                         elide: Text.ElideRight
@@ -535,16 +486,15 @@ ApplicationWindow {
 
                     Repeater {
                         model: [
-                            ["1 – 4", qsTr("Browse, Installed, Local, Settings")],
-                            ["/", qsTr("Search CurseForge")],
+                            ["1 – 4", qsTr("Downloads, Installed, Local, Settings")],
                             ["↑ ↓  J K", qsTr("Move the selection")],
                             [qsTr("Space"), qsTr("Install, update, link or unlink")],
                             [qsTr("Delete") + "  X", qsTr("Remove or unlink")],
-                            ["O", qsTr("Open the addon's page, or the local folder")],
-                            ["R", qsTr("Check for updates")],
+                            ["O", qsTr("Open this tab's folder")],
+                            ["R", qsTr("Look in Downloads again")],
                             ["U", qsTr("Update all")],
                             ["N", qsTr("New local addon")],
-                            [qsTr("Esc"), qsTr("Leave the search field")],
+                            [qsTr("Esc"), qsTr("Clear the message")],
                             ["?", qsTr("Show or hide shortcuts")],
                             ["Q", qsTr("Quit")]
                         ]
@@ -639,16 +589,5 @@ ApplicationWindow {
                 text: qsTr("Creates a .toc and a .lua with a slash command, and links it into AddOns.")
             }
         }
-    }
-
-    Dialog {
-        id: quitDialog
-        title: qsTr("Quit while installing?")
-        anchors.centerIn: parent
-        modal: true
-        standardButtons: Dialog.Yes | Dialog.No
-        Material.roundedScale: theme.radius
-        Label { text: qsTr("An install is still running. Quitting now may leave that addon half updated.") }
-        onAccepted: Qt.quit()
     }
 }

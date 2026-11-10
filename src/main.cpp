@@ -1,4 +1,4 @@
-// addoner: browse CurseForge and install World of Warcraft addons, plus your
+// addoner: install World of Warcraft addons from zips in Downloads, plus your
 // own addons from a local folder.
 
 #include <QCoreApplication>
