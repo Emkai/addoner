@@ -19,6 +19,7 @@ class Backend : public QObject {
     Q_PROPERTY(QString error READ error NOTIFY statusChanged)
     Q_PROPERTY(QVariantList results READ results NOTIFY resultsChanged)
     Q_PROPERTY(int resultsTotal READ resultsTotal NOTIFY resultsChanged)
+    Q_PROPERTY(QString searchError READ searchError NOTIFY resultsChanged)
     Q_PROPERTY(QVariantList installed READ installed NOTIFY installedChanged)
     Q_PROPERTY(int updateCount READ updateCount NOTIFY installedChanged)
     Q_PROPERTY(QStringList otherFolders READ otherFolders NOTIFY installedChanged)
@@ -37,6 +38,7 @@ public:
     QString error() const { return m_error; }
     QVariantList results() const;
     int resultsTotal() const { return m_total; }
+    QString searchError() const { return m_searchError; }
     QVariantList installed() const;
     int updateCount() const { return m_manager->modsWithUpdates().size(); }
     QStringList otherFolders() const { return m_manager->otherFolders(); }
@@ -82,6 +84,7 @@ private:
     QString m_error;
     QString m_query;
     QJsonArray m_results;
+    QString m_searchError;
     int m_total = 0;
     int m_searchGeneration = 0;
     QFileSystemWatcher m_watcher;

@@ -218,6 +218,7 @@ ApplicationWindow {
                         font.pixelSize: 12
                         visible: backend.apiKeySet
                         text: backend.searching ? qsTr("Searching…")
+                            : backend.searchError ? qsTr("Search failed")
                             : searchField.text.length > 0 ? qsTr("%n results", "", backend.resultsTotal)
                             : qsTr("Most popular")
                     }
@@ -254,12 +255,29 @@ ApplicationWindow {
                                 onClicked: tabs.currentIndex = 3
                             }
                         }
-                        Label {
+                        ColumnLayout {
                             parent: browseList
                             anchors.centerIn: parent
+                            width: Math.min(parent.width - 48, 560)
                             visible: backend.apiKeySet && !backend.searching && browseList.count === 0
-                            opacity: 0.6
-                            text: qsTr("Nothing found")
+                            spacing: 12
+                            Label {
+                                Layout.fillWidth: true
+                                horizontalAlignment: Text.AlignHCenter
+                                wrapMode: Text.Wrap
+                                text: backend.searchError || qsTr("Nothing found")
+                                color: backend.searchError ? "#ff8a8f" : "white"
+                                opacity: backend.searchError ? 1 : 0.6
+                            }
+                            Button {
+                                Material.roundedScale: theme.radius
+                                focusPolicy: Qt.NoFocus
+                                visible: backend.searchError !== ""
+                                Layout.alignment: Qt.AlignHCenter
+                                text: qsTr("Open Settings")
+                                highlighted: true
+                                onClicked: tabs.currentIndex = 3
+                            }
                         }
                     }
                 }

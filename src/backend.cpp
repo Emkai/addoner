@@ -133,16 +133,18 @@ void Backend::runSearch(bool append) {
         if (generation != m_searchGeneration)
             return;
         m_searching = false;
+        // Search problems show where the results would be, not just in the
+        // status bar, so a bad API key can't look like "nothing found".
+        m_searchError = error;
         if (error.isEmpty()) {
             if (!append)
                 m_results = {};
             for (const auto &mod : mods)
                 m_results.append(mod);
             m_total = total;
-            if (m_error.startsWith(tr("Search failed")))
-                report({});
-        } else {
-            report(tr("Search failed: %1").arg(error));
+        } else if (!append) {
+            m_results = {};
+            m_total = 0;
         }
         emit resultsChanged();
     });

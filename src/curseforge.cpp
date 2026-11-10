@@ -49,7 +49,8 @@ void CurseForge::handleJson(QNetworkReply *reply, JsonCallback done) {
         reply->deleteLater();
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         if (status == 403)
-            return done({}, tr("CurseForge rejected the API key. Check it under Settings."));
+            return done({}, tr("CurseForge rejected the API key. Keys start with $2a$10$ and are "
+                                "about 60 characters; copy yours from API keys at console.curseforge.com."));
         if (status == 404)
             return done({}, tr("CurseForge doesn't know that addon."));
         if (reply->error() != QNetworkReply::NoError)
