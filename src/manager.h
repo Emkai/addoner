@@ -35,6 +35,16 @@ public:
     // Installs the newest update zip of every addon that has one.
     QString updateAll(QStringList *names);
     QString uninstall(const QString &folder);
+    // Moves a zip in the downloads folder to the trash (or deletes it when
+    // there's no trash).
+    QString deleteZip(const QString &zipPath);
+    // Deletes the zips that are already installed or older than what's
+    // installed, so only new zips and updates are left. Sets *files to the
+    // file names deleted.
+    QString deleteInstalledZips(QStringList *files);
+    // The web page to check for newer versions of an installed addon, and to
+    // open. An empty url forgets it.
+    QString setPage(const QString &main, const QString &url);
 
     // Main folder name -> record, for addons installed from zips.
     QJsonObject installedAddons() const;
@@ -55,6 +65,7 @@ public:
         QString main;         // the folder the zip is named after
         QString title;
         QString version;
+        QString page;         // from the .toc's X-Website, X-WoWI-ID or X-Curse-Project-ID
     };
     ZipInfo inspectZip(const QString &zipPath) const;
     QString installZip(const QString &zipPath, const QStringList &replace, QStringList *folders);

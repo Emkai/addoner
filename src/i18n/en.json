@@ -1,4 +1,5 @@
 {
   "%n addons installed from zips": { "one": "%n addon installed from zips", "other": "%n addons installed from zips" },
-  "%n addon zips in %1": { "one": "%n addon zip in %1", "other": "%n addon zips in %1" }
+  "%n addon zips in %1": { "one": "%n addon zip in %1", "other": "%n addon zips in %1" },
+  "%n newer versions on the web": { "one": "%n newer version on the web", "other": "%n newer versions on the web" }
 }

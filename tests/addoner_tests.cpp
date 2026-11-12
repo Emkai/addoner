@@ -9,6 +9,7 @@
 #include "manager.h"
 #include "theme.h"
 #include "translator.h"
+#include "webchecker.h"
 
 class AddonerTests : public QObject {
     Q_OBJECT
@@ -147,6 +148,49 @@ private slots:
         QVERIFY(again.installedAddons().contains("Seven"));
         QCOMPARE(again.addonsDir(), addons());
         QCOMPARE(again.downloadsDir(), path("downloads"));
+    }
+
+    void pageComesFromTocAndSurvivesUpdates() {
+        QCOMPARE(m_manager->install(makeZip("Wowi-1.0", {{"Wowi/Wowi.toc", "## Version: 1.0\n## X-WoWI-ID: 4459\n"}})), QString());
+        QCOMPARE(m_manager->installedAddons().value("Wowi").toObject().value("page").toString(),
+                 QString("https://www.wowinterface.com/downloads/info4459.html"));
+        QCOMPARE(m_manager->setPage("Wowi", "github.com/me/Wowi"), QString());
+        QCOMPARE(m_manager->install(makeZip("Wowi-1.1", {{"Wowi/Wowi.toc", "## Version: 1.1\n## X-WoWI-ID: 4459\n"}})), QString());
+        // The page set by hand is kept over the .toc's.
+        QCOMPARE(m_manager->installedAddons().value("Wowi").toObject().value("page").toString(),
+                 QString("https://github.com/me/Wowi"));
+        QCOMPARE(m_manager->setPage("Wowi", ""), QString());
+        QVERIFY(!m_manager->installedAddons().value("Wowi").toObject().contains("page"));
+        QVERIFY(!m_manager->setPage("Wowi", "ftp://example.com").isEmpty());
+        QVERIFY(!m_manager->setPage("Nope", "https://example.com").isEmpty());
+    }
+
+    void pageFromTocPrefersWebsite() {
+        QCOMPARE(WebChecker::pageFromToc("https://example.com/a", "1", "2"), QString("https://example.com/a"));
+        QCOMPARE(WebChecker::pageFromToc("", "12", "34"), QString("https://www.wowinterface.com/downloads/info12.html"));
+        QCOMPARE(WebChecker::pageFromToc("", "", "34"), QString("https://www.curseforge.com/projects/34"));
+        QCOMPARE(WebChecker::pageFromToc("", "x", ""), QString());
+    }
+
+    void versionFromWowInterfacePage() {
+        QCOMPARE(WebChecker::versionFromPage(
+                     "<div id=\"author\">\n<div id=\"version\">Version: 12.1.9</div>by: <a href=\"x\">Me</a>"),
+                 QString("12.1.9"));
+        QCOMPARE(WebChecker::versionFromPage("<p>Latest <b>Version</b>: v2.3.1-beta now</p>"), QString("v2.3.1-beta"));
+        QCOMPARE(WebChecker::versionFromPage("<p>nothing here 1.2.3</p>"), QString());
+    }
+
+    void versionFromGitHub() {
+        QCOMPARE(WebChecker::versionFromGitHub("https://github.com/a/b/releases/tag/v1.4.0"), QString("v1.4.0"));
+        QCOMPARE(WebChecker::versionFromGitHub("https://github.com/a/b/releases"), QString());
+        QCOMPARE(WebChecker::versionFromGitHub(
+                     "<feed><title>Tags from b</title><entry><link rel=\"alternate\" type=\"text/html\" "
+                     "href=\"https://github.com/a/b/releases/tag/9.1.3\"/></entry></feed>"),
+                 QString("9.1.3"));
+        QCOMPARE(WebChecker::gitHubRepo(QUrl("https://github.com/Jaliborc/Bagnon.git")), QString("Jaliborc/Bagnon"));
+        QVERIFY(WebChecker::isGitHub(QUrl("https://github.com/a/b/releases")));
+        QVERIFY(!WebChecker::isGitHub(QUrl("https://github.com/a")));
+        QVERIFY(WebChecker::isCurseForge(QUrl("https://www.curseforge.com/wow/addons/bagnon")));
     }
 
     void otherFoldersAreUnmanaged() {

@@ -18,7 +18,7 @@ ApplicationWindow {
     Material.roundedScale: theme.radius
 
     property bool helpVisible: false
-    readonly property bool modalOpen: newAddonDialog.visible
+    readonly property bool modalOpen: newAddonDialog.visible || pageDialog.visible
 
     readonly property var lists: [downloadsList, installedList, localList]
     function currentList() { return tabs.currentIndex < 3 ? lists[tabs.currentIndex] : null }
@@ -62,6 +62,21 @@ ApplicationWindow {
         }
     }
 
+    // What the Installed tab says about an addon's web page.
+    function webState(addon) {
+        if (!addon.page) return qsTr("no web page")
+        if (!addon.webChecked) return backend.checking ? qsTr("checking the web…") : qsTr("not checked yet")
+        if (addon.webError) return qsTr("web: %1").arg(addon.webError)
+        return addon.webNewer ? qsTr("web has %1").arg(addon.webVersion)
+                              : qsTr("web has %1, nothing newer").arg(addon.webVersion)
+    }
+
+    // Open the page when it has something newer, or when it couldn't be read
+    // and only a look will tell.
+    function offersPage(addon) {
+        return !!addon.page && (addon.webNewer || !!addon.webError)
+    }
+
     function primaryAction() {
         const row = currentRow()
         if (!row) return
@@ -69,6 +84,7 @@ ApplicationWindow {
             if (row.status !== "linked") backend.install(row.path)
         } else if (tabs.currentIndex === 1) {
             if (row.updateZip) backend.install(row.updateZip)
+            else if (row.page) backend.openPage(row.page)
         } else {
             row.linked ? backend.unlink(row.name) : backend.link(row.name)
         }
@@ -77,7 +93,8 @@ ApplicationWindow {
     function removeAction() {
         const row = currentRow()
         if (!row) return
-        if (tabs.currentIndex === 1) backend.uninstall(row.main)
+        if (tabs.currentIndex === 0) backend.deleteZip(row.path)
+        else if (tabs.currentIndex === 1) backend.uninstall(row.main)
         else if (tabs.currentIndex === 2 && row.linked) backend.unlink(row.name)
     }
 
@@ -108,6 +125,7 @@ ApplicationWindow {
     Shortcut { sequence: "Escape"; context: Qt.ApplicationShortcut
         onActivated: {
             if (newAddonDialog.visible) newAddonDialog.reject()
+            else if (pageDialog.visible) pageDialog.reject()
             else if (win.helpVisible) win.helpVisible = false
             else { backend.clearMessage(); content.forceActiveFocus() }
         }
@@ -130,6 +148,15 @@ ApplicationWindow {
     }
     Shortcut { sequence: "U"; context: Qt.ApplicationShortcut; enabled: !win.modalOpen
         onActivated: { tabs.currentIndex = 1; backend.updateAll() }
+    }
+    Shortcut { sequence: "C"; context: Qt.ApplicationShortcut; enabled: !win.modalOpen
+        onActivated: { tabs.currentIndex = 1; backend.checkWeb() }
+    }
+    Shortcut { sequence: "P"; context: Qt.ApplicationShortcut; enabled: !win.modalOpen && tabs.currentIndex === 1
+        onActivated: { const row = win.currentRow(); if (row) pageDialog.start(row) }
+    }
+    Shortcut { sequence: "W"; context: Qt.ApplicationShortcut; enabled: !win.modalOpen && tabs.currentIndex === 1
+        onActivated: { const row = win.currentRow(); if (row && row.page) backend.openPage(row.page) }
     }
     Shortcut { sequence: "N"; context: Qt.ApplicationShortcut; enabled: !win.modalOpen
         onActivated: { tabs.currentIndex = 2; newAddonDialog.start() }
@@ -158,7 +185,12 @@ ApplicationWindow {
                           ? qsTr("Downloads (%1)").arg(backend.updateCount.toLocaleString(Qt.locale(), 'f', 0))
                           : qsTr("Downloads")
                 }
-                TabButton { text: qsTr("Installed"); focusPolicy: Qt.NoFocus }
+                TabButton {
+                    focusPolicy: Qt.NoFocus
+                    text: backend.webUpdateCount > 0
+                          ? qsTr("Installed (%1)").arg(backend.webUpdateCount.toLocaleString(Qt.locale(), 'f', 0))
+                          : qsTr("Installed")
+                }
                 TabButton { text: qsTr("Local"); focusPolicy: Qt.NoFocus }
                 TabButton { text: qsTr("Settings"); focusPolicy: Qt.NoFocus }
             }
@@ -208,6 +240,14 @@ ApplicationWindow {
                         Button {
                             Material.roundedScale: theme.radius
                             focusPolicy: Qt.NoFocus
+                            text: qsTr("Delete installed")
+                            flat: true
+                            enabled: backend.downloads.some(z => z.status === "installed" || z.status === "older")
+                            onClicked: backend.deleteInstalledZips()
+                        }
+                        Button {
+                            Material.roundedScale: theme.radius
+                            focusPolicy: Qt.NoFocus
                             text: qsTr("Update all")
                             highlighted: true
                             enabled: backend.updateCount > 0
@@ -233,7 +273,10 @@ ApplicationWindow {
                             actionText: win.zipAction(modelData.status)
                             actionHighlighted: modelData.status === "new" || modelData.status === "update"
                             actionEnabled: modelData.status !== "linked"
+                            removable: true
+                            removeText: qsTr("Delete")
                             onActivated: backend.install(modelData.path)
+                            onRemoveRequested: backend.deleteZip(modelData.path)
                         }
                         Label {
                             parent: downloadsList
@@ -272,6 +315,14 @@ ApplicationWindow {
                         Button {
                             Material.roundedScale: theme.radius
                             focusPolicy: Qt.NoFocus
+                            text: backend.checking ? qsTr("Checking…") : qsTr("Check web")
+                            flat: true
+                            enabled: !backend.checking
+                            onClicked: backend.checkWeb()
+                        }
+                        Button {
+                            Material.roundedScale: theme.radius
+                            focusPolicy: Qt.NoFocus
                             text: qsTr("Update all")
                             highlighted: true
                             enabled: backend.updateCount > 0
@@ -292,12 +343,17 @@ ApplicationWindow {
                         delegate: AddonRow {
                             title: modelData.title
                             subtitle: (modelData.version || qsTr("no version")) + "  ·  " + modelData.folders
-                            detail: qsTr("from %1").arg(modelData.zip)
-                            badge: modelData.updateZip ? qsTr("update") : ""
-                            actionText: modelData.updateZip ? qsTr("Update") : ""
-                            actionHighlighted: true
+                            detail: qsTr("from %1").arg(modelData.zip) + "  ·  " + win.webState(modelData)
+                            badge: modelData.updateZip ? qsTr("update")
+                                 : modelData.webNewer ? qsTr("new on web") : ""
+                            actionText: modelData.updateZip ? qsTr("Update")
+                                      : win.offersPage(modelData) ? qsTr("Open page") : ""
+                            actionHighlighted: !!modelData.updateZip || modelData.webNewer
+                            secondaryText: qsTr("Page…")
                             removable: true
-                            onActivated: backend.install(modelData.updateZip)
+                            onActivated: modelData.updateZip ? backend.install(modelData.updateZip)
+                                                             : backend.openPage(modelData.page)
+                            onSecondaryActivated: pageDialog.start(modelData)
                             onRemoveRequested: backend.uninstall(modelData.main)
                         }
                         footer: Item {
@@ -488,10 +544,13 @@ ApplicationWindow {
                         model: [
                             ["1 – 4", qsTr("Downloads, Installed, Local, Settings")],
                             ["↑ ↓  J K", qsTr("Move the selection")],
-                            [qsTr("Space"), qsTr("Install, update, link or unlink")],
-                            [qsTr("Delete") + "  X", qsTr("Remove or unlink")],
+                            [qsTr("Space"), qsTr("Install, update, open page, link or unlink")],
+                            [qsTr("Delete") + "  X", qsTr("Delete the zip, remove or unlink")],
                             ["O", qsTr("Open this tab's folder")],
                             ["R", qsTr("Look in Downloads again")],
+                            ["C", qsTr("Check the web for newer versions")],
+                            ["P", qsTr("Set the addon's web page")],
+                            ["W", qsTr("Open the addon's web page")],
                             ["U", qsTr("Update all")],
                             ["N", qsTr("New local addon")],
                             [qsTr("Esc"), qsTr("Clear the message")],
@@ -587,6 +646,61 @@ ApplicationWindow {
                 opacity: 0.6
                 font.pixelSize: 12
                 text: qsTr("Creates a .toc and a .lua with a slash command, and links it into AddOns.")
+            }
+        }
+    }
+
+    Dialog {
+        id: pageDialog
+        title: qsTr("Web page for %1").arg(addonTitle)
+        anchors.centerIn: parent
+        modal: true
+        width: Math.min(560, win.width - 48)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        Material.roundedScale: theme.radius
+
+        property string main: ""
+        property string addonTitle: ""
+        property string problem: ""
+
+        function start(addon) {
+            main = addon.main
+            addonTitle = addon.title
+            problem = ""
+            urlField.text = addon.page || ""
+            open()
+        }
+        onOpened: { urlField.forceActiveFocus(); urlField.selectAll() }
+        onAccepted: {
+            const error = backend.setPage(main, urlField.text)
+            if (error !== "") {
+                problem = error
+                open()
+            }
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 12
+            TextField {
+                id: urlField
+                Layout.fillWidth: true
+                placeholderText: qsTr("https://www.wowinterface.com/downloads/info…")
+                onAccepted: pageDialog.accept()
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                visible: pageDialog.problem !== ""
+                text: pageDialog.problem
+                color: "#ff8a8f"
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                opacity: 0.6
+                font.pixelSize: 12
+                text: qsTr("WoWInterface pages and GitHub repositories are checked for newer versions. CurseForge doesn't let programs read its pages, so those only get an Open page button. Leave it empty to forget the page.")
             }
         }
     }

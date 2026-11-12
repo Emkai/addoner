@@ -18,10 +18,13 @@ Rectangle {
     property bool actionHighlighted: false
     property bool actionEnabled: true
     property bool removable: false
+    property string removeText: qsTr("Remove")
+    property string secondaryText: ""
     property bool selected: ListView.isCurrentItem
 
     signal activated()
     signal removeRequested()
+    signal secondaryActivated()
 
     width: ListView.view ? ListView.view.width : 0
     height: 72
@@ -100,8 +103,16 @@ Rectangle {
             Material.roundedScale: theme.radius
             focusPolicy: Qt.NoFocus
             flat: true
+            visible: row.secondaryText !== ""
+            text: row.secondaryText
+            onClicked: row.secondaryActivated()
+        }
+        Button {
+            Material.roundedScale: theme.radius
+            focusPolicy: Qt.NoFocus
+            flat: true
             visible: row.removable
-            text: qsTr("Remove")
+            text: row.removeText
             onClicked: row.removeRequested()
         }
         Button {

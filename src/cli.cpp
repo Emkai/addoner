@@ -1,6 +1,7 @@
 #include "cli.h"
 
 #include <QDir>
+#include <QEventLoop>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -8,11 +9,12 @@
 #include <QTextStream>
 
 #include "manager.h"
+#include "webchecker.h"
 
 namespace {
 
 const QStringList Commands{"help", "--help", "-h", "downloads", "list", "install", "remove", "update",
-                           "local", "link", "unlink", "new"};
+                           "check", "page", "local", "link", "unlink", "new"};
 
 const char *Usage =
     "Usage: addoner [command] [--json]\n"
@@ -24,6 +26,8 @@ const char *Usage =
     "  remove <folder>         remove an addon Addoner installed\n"
     "  list                    installed addons, and which have an update zip\n"
     "  update                  install every update zip in the downloads folder\n"
+    "  check                   read each installed addon's web page for a newer version\n"
+    "  page <folder> [url]     show or set an installed addon's web page (\"\" forgets it)\n"
     "  local                   list local addons and whether they're linked\n"
     "  link <name>             link a local addon into AddOns\n"
     "  unlink <name>           remove that link\n"
@@ -132,6 +136,63 @@ int Cli::run(AddonManager &manager, QStringList args) {
                                               updates.contains(it.key()) ? "  [update: " + QFileInfo(updates.value(it.key())).fileName() + "]" : "");
         }
         print(json, rows, text.isEmpty() ? "No addons installed from zips." : text.trimmed());
+        return 0;
+    }
+
+    if (command == "page") {
+        if (args.size() != 2 && args.size() != 3)
+            return fail("page takes an addon folder name and, to set it, a url");
+        if (!manager.installedAddons().contains(args[1]))
+            return fail(args[1] + " wasn't installed by Addoner.");
+        if (args.size() == 3) {
+            const QString error = manager.setPage(args[1], args[2]);
+            if (!error.isEmpty())
+                return fail(error);
+        }
+        const QString page = manager.installedAddons().value(args[1]).toObject().value("page").toString();
+        print(json, QJsonObject{{"main", args[1]}, {"page", page}}, page.isEmpty() ? "No web page." : page);
+        return 0;
+    }
+
+    if (command == "check") {
+        const QJsonObject addons = manager.installedAddons();
+        WebChecker checker;
+        QEventLoop loop;
+        int pending = 0;
+        QJsonArray rows;
+        for (auto it = addons.begin(); it != addons.end(); ++it) {
+            const QJsonObject record = it.value().toObject();
+            const QString page = record.value("page").toString();
+            if (page.isEmpty())
+                continue;
+            ++pending;
+            checker.check(QUrl(page), [&, main = it.key(), record, page](const WebChecker::Result &result) {
+                const QString installed = record.value("version").toString();
+                rows.append(QJsonObject{
+                    {"main", main},
+                    {"version", installed},
+                    {"page", page},
+                    {"webVersion", result.version},
+                    {"error", result.error},
+                    {"newer", !result.version.isEmpty() && AddonManager::compareVersions(result.version, installed) > 0},
+                });
+                if (--pending == 0)
+                    loop.quit();
+            });
+        }
+        if (pending > 0)
+            loop.exec();
+        QString text;
+        for (const auto &value : rows) {
+            const QJsonObject row = value.toObject();
+            const QString state = !row.value("error").toString().isEmpty() ? "can't check: " + row.value("error").toString()
+                                : row.value("newer").toBool() ? "newer on the web: " + row.value("webVersion").toString()
+                                                              : "up to date (web has " + row.value("webVersion").toString() + ")";
+            text += QString("%1  %2  [%3]  %4\n").arg(row.value("main").toString(), row.value("version").toString(),
+                                                     state, row.value("page").toString());
+        }
+        print(json, rows, text.isEmpty() ? "No installed addon has a web page. Set one with: addoner page <folder> <url>"
+                                         : text.trimmed());
         return 0;
     }
 

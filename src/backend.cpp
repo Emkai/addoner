@@ -3,6 +3,7 @@
 #include <QCollator>
 #include <QDesktopServices>
 #include <QDir>
+#include <QFileInfo>
 #include <QJsonObject>
 #include <QUrl>
 
@@ -26,6 +27,8 @@ Backend::Backend(AddonManager *manager, QObject *parent) : QObject(parent), m_ma
     });
     watchFolders();
     refresh();
+    // Once at startup, after the window is up.
+    QTimer::singleShot(0, this, &Backend::checkWeb);
 }
 
 void Backend::watchFolders() {
@@ -43,11 +46,24 @@ void Backend::refresh() {
 
     const QJsonObject addons = m_manager->installedAddons();
     m_installed.clear();
+    m_webUpdateCount = 0;
     for (auto it = addons.begin(); it != addons.end(); ++it) {
         QVariantMap row = it.value().toObject().toVariantMap();
         row["main"] = it.key();
         row["folders"] = it.value().toObject().value("folders").toVariant().toStringList().join(", ");
         row["updateZip"] = m_updates.value(it.key());
+        // Results for a page that's since been changed don't count.
+        const QString page = row.value("page").toString();
+        const bool checked = !page.isEmpty() && m_webPages.value(it.key()) == page && m_webResults.contains(it.key());
+        const WebChecker::Result web = checked ? m_webResults.value(it.key()) : WebChecker::Result{};
+        const bool newer = !web.version.isEmpty()
+            && AddonManager::compareVersions(web.version, row.value("version").toString()) > 0;
+        row["webChecked"] = checked;
+        row["webVersion"] = web.version;
+        row["webError"] = web.error;
+        row["webNewer"] = newer;
+        if (newer)
+            ++m_webUpdateCount;
         m_installed.append(row);
     }
     QCollator collator;
@@ -90,6 +106,16 @@ void Backend::uninstall(const QString &folder) {
     report(m_manager->uninstall(folder), tr("Removed %1").arg(title));
 }
 
+void Backend::deleteZip(const QString &zipPath) {
+    report(m_manager->deleteZip(zipPath), tr("Deleted %1").arg(QFileInfo(zipPath).fileName()));
+}
+
+void Backend::deleteInstalledZips() {
+    QStringList files;
+    const QString error = m_manager->deleteInstalledZips(&files);
+    report(error, files.isEmpty() ? tr("No installed zips to delete") : tr("Deleted %1").arg(files.join(", ")));
+}
+
 void Backend::link(const QString &name) {
     report(m_manager->link(name), tr("Linked %1 into AddOns").arg(name));
 }
@@ -107,6 +133,49 @@ QString Backend::createAddon(const QString &name, const QString &title, const QS
 void Backend::openFolder(const QString &path) {
     if (!QDesktopServices::openUrl(QUrl::fromLocalFile(path)))
         report(tr("Couldn't open %1").arg(path));
+}
+
+void Backend::checkWeb() {
+    if (m_pending > 0)
+        return;
+    const QJsonObject addons = m_manager->installedAddons();
+    for (auto it = addons.begin(); it != addons.end(); ++it) {
+        const QString page = it.value().toObject().value("page").toString();
+        if (!page.isEmpty())
+            checkPage(it.key(), page);
+    }
+    if (m_pending == 0 && !addons.isEmpty())
+        report({}, tr("No addon has a web page to check yet. Add one with Page… on the Installed tab."));
+}
+
+void Backend::checkPage(const QString &main, const QString &page) {
+    if (m_pending++ == 0)
+        emit checkingChanged();
+    m_web.check(QUrl(page), [this, main, page](const WebChecker::Result &result) {
+        m_webResults[main] = result;
+        m_webPages[main] = page;
+        if (--m_pending == 0) {
+            refresh();
+            emit checkingChanged();
+            report({}, m_webUpdateCount > 0
+                           ? tr("%n newer versions on the web", "", m_webUpdateCount)
+                           : tr("Checked the web: nothing newer"));
+        }
+    });
+}
+
+QString Backend::setPage(const QString &main, const QString &url) {
+    const QString error = m_manager->setPage(main, url);
+    report(error, url.trimmed().isEmpty() ? tr("Forgot the page") : tr("Saved the page"));
+    const QString page = m_manager->installedAddons().value(main).toObject().value("page").toString();
+    if (error.isEmpty() && !page.isEmpty())
+        checkPage(main, page);
+    return error;
+}
+
+void Backend::openPage(const QString &url) {
+    if (url.isEmpty() || !QDesktopServices::openUrl(QUrl(url)))
+        report(tr("Couldn't open %1").arg(url));
 }
 
 QString Backend::saveSettings(const QString &addonsDir, const QString &localDir, const QString &downloadsDir) {

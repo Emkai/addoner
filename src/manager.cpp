@@ -10,6 +10,9 @@
 #include <QSet>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QUrl>
+
+#include "webchecker.h"
 
 namespace {
 
@@ -282,6 +285,8 @@ AddonManager::ZipInfo AddonManager::inspectZip(const QString &zipPath) const {
     if (info.title.isEmpty())
         info.title = info.main;
     info.version = tocField(mainSource, "Version");
+    info.page = WebChecker::pageFromToc(tocField(mainSource, "X-Website"), tocField(mainSource, "X-WoWI-ID"),
+                                        tocField(mainSource, "X-Curse-Project-ID"));
     return info;
 }
 
@@ -368,20 +373,26 @@ QString AddonManager::install(const QString &zipPath, QString *name) {
         return tr("%1 has no addon in it.").arg(QFileInfo(zipPath).fileName());
 
     QJsonObject addons = installedAddons();
+    const QJsonObject previous = addons.value(info.main).toObject();
     QStringList replace, folders;
-    for (const auto &folder : addons.value(info.main).toObject().value("folders").toArray())
+    for (const auto &folder : previous.value("folders").toArray())
         replace.append(folder.toString());
     const QString error = installZip(zipPath, replace, &folders);
     if (!error.isEmpty())
         return tr("%1: %2").arg(info.title, error);
 
-    addons[info.main] = QJsonObject{
+    // A page set by hand wins over the one in the .toc.
+    const QString page = previous.value("page").toString(info.page);
+    QJsonObject record{
         {"title", info.title},
         {"version", info.version},
         {"folders", QJsonArray::fromStringList(folders)},
         {"zip", QFileInfo(zipPath).fileName()},
         {"installed", QDateTime::currentDateTime().toString(Qt::ISODate)},
     };
+    if (!page.isEmpty())
+        record["page"] = page;
+    addons[info.main] = record;
     setInstalled(addons);
     if (name)
         *name = info.title;
@@ -465,6 +476,55 @@ QString AddonManager::uninstall(const QString &folder) {
         if (safeName(name) && !stillUsed.contains(name))
             removeRealEntry(dir.filePath(name));
     }
+    setInstalled(addons);
+    emit changed();
+    return {};
+}
+
+QString AddonManager::deleteZip(const QString &zipPath) {
+    const QFileInfo file(zipPath);
+    // Only zips straight in the downloads folder: nothing else is ours to delete.
+    if (!file.isFile() || file.suffix().compare("zip", Qt::CaseInsensitive) != 0
+        || QDir(file.absolutePath()) != QDir(m_downloadsDir))
+        return tr("There's no zip at %1 in the downloads folder.").arg(zipPath);
+    QFile zip(file.absoluteFilePath());
+    if (!zip.moveToTrash() && !zip.remove())
+        return tr("Couldn't delete %1: %2").arg(file.fileName(), zip.errorString());
+    m_zipCache.remove(file.absoluteFilePath());
+    emit changed();
+    return {};
+}
+
+QString AddonManager::deleteInstalledZips(QStringList *files) {
+    for (const auto &value : downloads()) {
+        const QJsonObject zip = value.toObject();
+        const QString status = zip.value("status").toString();
+        if (status != "installed" && status != "older")
+            continue;
+        const QString error = deleteZip(zip.value("path").toString());
+        if (!error.isEmpty())
+            return error;
+        files->append(zip.value("file").toString());
+    }
+    return {};
+}
+
+QString AddonManager::setPage(const QString &main, const QString &url) {
+    QJsonObject addons = installedAddons();
+    if (!addons.contains(main))
+        return tr("%1 wasn't installed by Addoner.").arg(main);
+    QJsonObject record = addons.value(main).toObject();
+    const QString trimmed = url.trimmed();
+    if (trimmed.isEmpty()) {
+        record.remove("page");
+    } else {
+        // "github.com/me/addon" means https, not fromUserInput's http.
+        const QUrl page = QUrl::fromUserInput(trimmed.contains("://") ? trimmed : "https://" + trimmed);
+        if (!page.isValid() || (page.scheme() != "http" && page.scheme() != "https") || page.host().isEmpty())
+            return tr("That isn't a web address: %1").arg(trimmed);
+        record["page"] = page.toString();
+    }
+    addons[main] = record;
     setInstalled(addons);
     emit changed();
     return {};
